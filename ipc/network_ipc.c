@@ -79,6 +79,26 @@ static int prepare_ipc(void) {
 	return connfd;
 }
 
+
+/*
+ * This is used to spawn internal threads
+ */
+pthread_t start_thread(void *(* start_routine) (void *), void *arg)
+{
+	int ret;
+	pthread_t id;
+	pthread_attr_t attr;
+
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
+
+	ret = pthread_create(&id, &attr, start_routine, arg);
+	if (ret) {
+		exit(1);
+	}
+	return id;
+}
+
 int ipc_postupdate(ipc_message *msg) {
 	int connfd = prepare_ipc();
 	if (connfd < 0) {

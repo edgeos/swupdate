@@ -39,6 +39,12 @@
 #define NODEROOT (!strlen(CONFIG_LIBCONFIGROOT) ? \
 			"software" : CONFIG_LIBCONFIGROOT)
 
+#define EDGEOS_ROOT_PRI      "rootfs1"
+#define EDGEOS_ROOT_PRI_NUM  2
+#define EDGEOS_ROOT_SEC      "rootfs2"
+#define EDGEOS_ROOT_SEC_NUM  3
+#define EDGEOS_SW_SET        "stable"
+
 #ifdef CONFIG_LIBCONFIG
 static config_setting_t *find_node_libconfig(config_t *cfg,
 					const char *field, struct swupdate_cfg *swcfg)
@@ -484,6 +490,74 @@ static void parse_files(parsertype p, void *cfg, struct swupdate_cfg *swcfg)
 	}
 }
 
+static int find_partition_swap(parsertype p, void *cfg, struct swupdate_cfg *swcfg)
+{
+        int retval = 0; /*assume success*/
+        const char* filename = "/proc/cmdline";
+        const char* rootopt = "root=";
+        const char *sw_set = EDGEOS_SW_SET;
+        char* findroot;
+        int fd = 0;
+        int partitionNum = 0;
+        int i = 0;
+        unsigned int size = 4096;
+        char *string;
+
+        string = (char *)malloc(size);
+        if (!string)
+                return -ENOMEM;
+
+        fd = open(filename, O_RDONLY);
+        if (fd < 0) {
+                free(string);
+                return -EBADF;
+        }
+
+        retval = read(fd, string, size);
+        close(fd);
+
+        /*Find partition number, will either be right before next ' ' or last character in string*/
+        findroot = strstr(string, rootopt);
+        for (i=strlen(rootopt); i<strlen(findroot);i++)
+        {
+                if ( (char) *(findroot+i) == ' ' )
+                {
+                        break; 
+                }
+        }
+
+        printf("Current root device partition: %c\n", *(findroot+(i-1)));
+        partitionNum = atoi(findroot+(i-1));
+
+        if (partitionNum  == EDGEOS_ROOT_PRI_NUM)
+        {
+                const char *root = EDGEOS_ROOT_SEC;
+                strncpy(swcfg->software_set, sw_set, strlen(sw_set));
+                strncpy(swcfg->running_mode, root, strlen(root));
+	        printf("Attempting install on %s\n", EDGEOS_ROOT_SEC);
+                retval = 0;
+        }
+        else if (partitionNum == EDGEOS_ROOT_SEC_NUM)
+        {
+                const char *root = EDGEOS_ROOT_PRI;
+                strncpy(swcfg->software_set, sw_set, strlen(sw_set));
+                strncpy(swcfg->running_mode, root, strlen(root));
+	        printf("Attempting install on %s\n", EDGEOS_ROOT_PRI);
+                retval = 0;
+        }
+        else
+        {
+                retval = 1; /* Root not on expected partition, bailing out*/
+        }
+
+        if (string) 
+        {
+	  free(string);
+        }
+        
+        return retval;
+}
+
 static int parser(parsertype p, void *cfg, struct swupdate_cfg *swcfg)
 {
 
@@ -505,9 +579,27 @@ static int parser(parsertype p, void *cfg, struct swupdate_cfg *swcfg)
 	if (LIST_EMPTY(&swcfg->images) &&
 	    LIST_EMPTY(&swcfg->partitions) &&
 	    LIST_EMPTY(&swcfg->scripts) &&
-	    LIST_EMPTY(&swcfg->uboot)) {
-		ERROR("Found nothing to install\n");
-		return -1;
+	    LIST_EMPTY(&swcfg->uboot)) 
+        {
+                /*See if we are using rootfs swapping*/
+	        if ( (strlen(swcfg->running_mode)== 0) || (strlen(swcfg->software_set) == 0) )
+                {
+	                printf("Attempting to find correct rootfs in partition swapping scheme, if applicable\n");
+                        if (find_partition_swap(p, cfg, swcfg) == 0)
+                        {
+                                parser(p, cfg, swcfg);
+                        }
+                        else
+                        {
+		                ERROR("No swapping scheme found, nothing to install\n");
+		                return -1;
+                        }
+                }
+                else
+                {
+		        ERROR("Found nothing to install\n");
+		        return -1;
+                }
 	}
 
 	return 0;
